@@ -3,7 +3,7 @@ from datetime import datetime
 import numpy as np
 
 
-dl_experiments = ['CNN IEEE']  #Replace the name of the model here
+dl_experiments = ['LSTM IEEE']  #Replace the name of the model here
 
 
 train_time_list = []
