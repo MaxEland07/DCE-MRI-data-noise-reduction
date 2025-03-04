@@ -1,20 +1,22 @@
 import numpy as np
 import os
 import tensorflow as tf
-from tensorflow.keras.models import Sequential  # Correct import for Sequential
+from tensorflow.keras.models import Sequential
+import matplotlib.pyplot as plt
 
-# Force eager execution
-tf.config.run_functions_eagerly(True)
-
-# Explicitly disable TPU usage and stick with CPU
+# Connect to TPU
 try:
-    tf.config.set_visible_devices([], 'TPU')
-    print("TPU devices hidden")
-except:
-    print("No TPU devices found to hide")
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(tpu)
+    tf.tpu.experimental.initialize_tpu_system(tpu)
+    strategy = tf.distribute.TPUStrategy(tpu)
+    print("TPU initialized successfully")
+except ValueError:
+    print("TPU not found, falling back to CPU/GPU")
+    strategy = tf.distribute.get_strategy()
 
 print("TensorFlow version:", tf.__version__)
-print("Eager execution enabled:", tf.executing_eagerly())
+print("Number of replicas:", strategy.num_replicas_in_sync)
 
 # Load your data
 data_dir = './MIT-BIH-ST-Dataset/Train_Test_Data'
@@ -29,20 +31,29 @@ print(f"y_train shape: {y_train.shape}")
 print(f"X_test shape: {X_test.shape}")
 print(f"y_test shape: {y_test.shape}")
 
-# Ensure data is in the right format
-if len(X_train.shape) == 2:
-    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-    y_train = y_train.reshape(y_train.shape[0], y_train.shape[1], 1)
-    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
-    y_test = y_test.reshape(y_test.shape[0], y_test.shape[1], 1)
+# Normalize data (min-max scaling)
+X_train = (X_train - X_train.mean()) / (X_train.max() - X_train.min())
+X_test = (X_test - X_test.mean()) / (X_test.max() - X_test.min())
+y_train = (y_train - y_train.mean()) / (y_train.max() - y_train.min())
+y_test = (y_test - y_test.mean()) / (y_test.max() - y_test.min())
 
-# Define the new model
-model = Sequential()
-model.add(tf.keras.layers.LSTM(140, input_shape=(512, 1), return_sequences=True))
-model.add(tf.keras.layers.Dense(140, activation='relu'))
-model.add(tf.keras.layers.LSTM(140, return_sequences=True))  # Second LSTM layer
-model.add(tf.keras.layers.Dense(140, activation='relu'))
-model.add(tf.keras.layers.Dense(1, activation='linear'))
+# Define model within TPU strategy scope
+with strategy.scope():
+    model = Sequential([
+        tf.keras.layers.LSTM(128, input_shape=(512, 1), return_sequences=True),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.LSTM(64, return_sequences=True),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dense(1, activation='linear')
+    ])
+
+    # Compile with TPU-friendly settings and gradient clipping
+    model.compile(
+        loss='mse',
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005, clipnorm=1.0),
+        metrics=['mae']
+    )
 
 model.summary()
 
@@ -50,13 +61,7 @@ model.summary()
 output_dir = './lstm_model_output'
 os.makedirs(output_dir, exist_ok=True)
 
-# Compile model with standard Adam optimizer
-model.compile(
-    loss='mse',
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001)  # Standard Adam
-)
-
-# Minimal callbacks
+# Callbacks
 checkpoint = tf.keras.callbacks.ModelCheckpoint(
     os.path.join(output_dir, 'model.weights.h5'),
     save_best_only=True,
@@ -66,57 +71,78 @@ checkpoint = tf.keras.callbacks.ModelCheckpoint(
 
 early_stop = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
-    patience=5
+    patience=15,
+    restore_best_weights=True
 )
+
+reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.3,
+    patience=5,
+    min_lr=1e-6
+)
+
+class PlotLosses(tf.keras.callbacks.Callback):
+    def __init__(self):
+        super(PlotLosses, self).__init__()
+        self.train_losses = []
+        self.val_losses = []
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        self.train_losses.append(logs.get('loss'))
+        self.val_losses.append(logs.get('val_loss'))
+        
+        plt.plot(self.train_losses, label='Training Loss')
+        plt.plot(self.val_losses, label='Validation Loss')
+        plt.title(f'Epoch {epoch + 1}')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.savefig(os.path.join(output_dir, f'loss_plot_epoch_{epoch + 1}.png'))
+        plt.close()
 
 # Training parameters
 batch_size = 64
-epochs = 5
+epochs = 50
 
-try:
-    # Train the model
-    print("Starting training...")
-    history = model.fit(
-        X_train, y_train,
-        validation_split=0.2,
-        batch_size=batch_size,
-        epochs=epochs,
-        callbacks=[checkpoint, early_stop],
-        verbose=1
-    )
-    
-    print("Training completed successfully!")
-    
-    # Save predictions
-    print("Generating predictions...")
-    y_pred = model.predict(X_test, batch_size=batch_size)
-    np.save(os.path.join(output_dir, 'predictions.npy'), y_pred)
-    print("Predictions saved!")
-    
-except Exception as e:
-    print(f"Error during execution: {str(e)}")
-    
-    # Fallback to a simpler approach
-    print("\n\nTrying an alternative approach...")
-    
-    # Create a simple dense model
-    simple_model = tf.keras.Sequential([
-        tf.keras.layers.Flatten(input_shape=(512, 1)),
-        tf.keras.layers.Dense(100, activation='relu'),
-        tf.keras.layers.Dense(512)
-    ])
-    
-    simple_model.compile(optimizer='adam', loss='mse')
-    
-    # Reshape targets for dense model
-    y_train_flat = y_train.reshape(y_train.shape[0], -1)  # Flatten the targets
-    
-    print("Training simple model...")
-    simple_model.fit(
-        X_train, y_train_flat,
-        batch_size=16,
-        epochs=5,
-        verbose=1
-    )
-    
-    print("Simple model training complete!")
+# Train the model
+print("Starting training...")
+history = model.fit(
+    X_train, y_train,
+    validation_split=0.2,
+    batch_size=batch_size,
+    epochs=epochs,
+    callbacks=[checkpoint, early_stop, reduce_lr, PlotLosses()],
+    verbose=1
+)
+
+print("Training completed successfully!")
+
+# Evaluate and save predictions
+print("Generating predictions...")
+y_pred = model.predict(X_test, batch_size=batch_size)
+np.save(os.path.join(output_dir, 'predictions.npy'), y_pred)
+
+# Denormalize for visualization
+y_pred = y_pred * (y_test.max() - y_test.min()) + y_test.mean()
+X_test = X_test * (y_test.max() - y_test.min()) + y_test.mean()
+y_test = y_test * (y_test.max() - y_test.min()) + y_test.mean()
+
+# Save example plots for visual inspection
+for i in range(min(10, len(X_test))):
+    plt.figure(figsize=(12, 4))
+    plt.subplot(3, 1, 1)
+    plt.plot(X_test[i, :, 0], label='Noisy')
+    plt.legend()
+    plt.subplot(3, 1, 2)
+    plt.plot(y_pred[i, :, 0], label='Predicted')
+    plt.legend()
+    plt.subplot(3, 1, 3)
+    plt.plot(y_test[i, :, 0], label='Clean')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'example_{i}.png'))
+    plt.close()
+
+print("Predictions and example plots saved!")

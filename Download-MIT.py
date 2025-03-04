@@ -92,10 +92,14 @@ def download_nstdb():
     
     print("Download complete!")
 
-def load_and_prepare_data(target_length=512):
+def load_and_prepare_data(target_length=512, stride=256):
     """
     Load data from MIT-BIH Noise Stress Test Database and prepare it for training
     Returns X_clean (clean ECG signals) and X_noisy (noisy ECG signals)
+    
+    Args:
+        target_length: Length of each segment (default: 512)
+        stride: Step size between segments (default: 256)
     """
     X_clean = []
     X_noisy = {}  # Use dictionary to organize by SNR
@@ -115,10 +119,9 @@ def load_and_prepare_data(target_length=512):
         '119e06': '6dB', '119e00': '0dB', '119e_6': '-6dB'
     }
     
-    # Store the original clean signals for reference
     clean_signals = {}
     
-    # First, load all the original clean records completely
+    # Load clean records
     for record_name in clean_records:
         try:
             record_path = os.path.join(raw_data_dir, record_name)
@@ -131,37 +134,23 @@ def load_and_prepare_data(target_length=512):
         except Exception as e:
             print(f"Error loading clean record {record_name}: {e}")
     
-    # Now load all noisy records and map them to their corresponding clean segments
+    # Load and process noisy records
     for record_name, snr_level in noisy_record_map.items():
         try:
-            # Get base record name (118 or 119)
             base_record = record_name[:3]
             
-            # Skip if we don't have the corresponding clean record
             if base_record not in clean_signals:
                 print(f"Warning: Clean record {base_record} not found, skipping {record_name}")
                 continue
                 
-            # Read the noisy record
             record_path = os.path.join(raw_data_dir, record_name)
             record = wfdb.rdrecord(record_path)
             fs = record.fs
             
-            # Get the ECG signal (first channel)
             noisy_signal = record.p_signal[:, 0]
             print(f"Loaded noisy record {record_name}, length: {len(noisy_signal)}")
             
-            # According to the NSTDB documentation:
-            # The first 5 minutes of each record are clean, followed by 2-minute segments
-            # alternating between noisy and clean
-            
-            # Get the noise-added segments (min 5-7, 9-11, 13-15)
-            fs = clean_signals[base_record]['fs']
-            
-            # Important: The noisy record is a direct copy of the clean record with noise added
-            # So we need to extract the exact same segments from both
-            
-            # Define the noisy segment start times (in minutes)
+            # Define noisy segment start times (in minutes)
             noisy_segment_starts = [5, 9, 13]  # minutes
             segment_duration = 2  # minutes
             
@@ -169,47 +158,46 @@ def load_and_prepare_data(target_length=512):
                 start_sample = int(start_min * 60 * fs)
                 end_sample = int((start_min + segment_duration) * 60 * fs)
                 
-                # Ensure the segment is within bounds
                 if end_sample > len(noisy_signal):
                     print(f"Segment {segment_idx+1} exceeds record length, skipping")
                     continue
                 
-                # Cut this segment into chunks of target_length
-                num_chunks = (end_sample - start_sample - target_length) // target_length
-                for chunk_idx in range(min(10, num_chunks)):  # Limit to 10 chunks per segment
-                    chunk_start = start_sample + chunk_idx * target_length
+                # Modified chunk generation with stride
+                chunk_start = start_sample
+                chunk_idx = 0
+                
+                while chunk_start + target_length <= end_sample:
                     chunk_end = chunk_start + target_length
                     
-                    if chunk_end <= end_sample:
-                        # Extract the noisy segment
-                        noisy_segment = noisy_signal[chunk_start:chunk_end]
-                        
-                        # Extract the SAME segment from the clean record
-                        # This ensures perfect alignment
-                        clean_segment = clean_signals[base_record]['signal'][chunk_start:chunk_end]
-                        
-                        # Store both segments
-                        X_noisy[snr_level].append({
-                            'segment': noisy_segment,
-                            'record': base_record,
-                            'start_idx': chunk_start,
-                            'segment_idx': segment_idx,
-                            'chunk_idx': chunk_idx
-                        })
-                        
-                        X_clean.append({
-                            'segment': clean_segment,
-                            'record': base_record,
-                            'start_idx': chunk_start,
-                            'segment_idx': segment_idx,
-                            'chunk_idx': chunk_idx,
-                            'snr': snr_level  # Track which SNR level this clean segment corresponds to
-                        })
+                    noisy_segment = noisy_signal[chunk_start:chunk_end]
+                    clean_segment = clean_signals[base_record]['signal'][chunk_start:chunk_end]
+                    
+                    X_noisy[snr_level].append({
+                        'segment': noisy_segment,
+                        'record': base_record,
+                        'start_idx': chunk_start,
+                        'segment_idx': segment_idx,
+                        'chunk_idx': chunk_idx
+                    })
+                    
+                    X_clean.append({
+                        'segment': clean_segment,
+                        'record': base_record,
+                        'start_idx': chunk_start,
+                        'segment_idx': segment_idx,
+                        'chunk_idx': chunk_idx,
+                        'snr': snr_level
+                    })
+                    
+                    chunk_start += stride
+                    chunk_idx += 1
+                
+                print(f"Generated {chunk_idx} chunks for {record_name} segment {segment_idx+1}")
         
         except Exception as e:
             print(f"Error processing noisy record {record_name}: {e}")
     
-    # Print summary of collected data
+    # Print summary
     print("\nData collection summary:")
     total_clean = len(X_clean)
     print(f"Total segments collected: {total_clean}")
@@ -217,7 +205,7 @@ def load_and_prepare_data(target_length=512):
         if X_noisy[snr]:
             print(f"SNR {snr}: {len(X_noisy[snr])} segments")
         else:
-            print(f"SNR {snr}: No segments found")
+            print(f"SNR {snr}: No segments found")    
     
     # Create visualization examples that show the same segment across all SNR levels
     visual_examples = []
@@ -253,7 +241,6 @@ def load_and_prepare_data(target_length=512):
     # Now organize the data for training
     # We'll create a paired dataset where each noisy segment is matched with its clean counterpart
     paired_data = []
-    
     for snr in ['24dB', '18dB', '12dB', '6dB', '0dB', '-6dB']:
         for noisy_item in X_noisy[snr]:
             key = f"{noisy_item['record']}_{noisy_item['segment_idx']}_{noisy_item['chunk_idx']}"
@@ -266,15 +253,12 @@ def load_and_prepare_data(target_length=512):
     
     print(f"Created {len(paired_data)} paired samples")
     
-    # Prepare arrays for training
     X_clean_array = np.array([pair['clean'] for pair in paired_data])
     X_noisy_array = np.array([pair['noisy'] for pair in paired_data])
     
-    # Reshape for CNN input
     X_clean_array = X_clean_array.reshape(X_clean_array.shape[0], X_clean_array.shape[1], 1)
     X_noisy_array = X_noisy_array.reshape(X_noisy_array.shape[0], X_noisy_array.shape[1], 1)
     
-    # Create separate arrays by SNR level for visualization
     X_noisy_by_level = {}
     for snr in ['24dB', '18dB', '12dB', '6dB', '0dB', '-6dB']:
         snr_samples = [pair['noisy'] for pair in paired_data if pair['snr'] == snr]
@@ -282,13 +266,16 @@ def load_and_prepare_data(target_length=512):
             X_noisy_by_level[snr] = np.array(snr_samples).reshape(-1, target_length, 1)
     
     return X_clean_array, X_noisy_array, X_noisy_by_level, visual_examples
-
+    
 if __name__ == "__main__":
     # Download the database
     download_nstdb()
     
     # Load and prepare data
-    X_clean, X_noisy, X_noisy_by_level, visual_examples = load_and_prepare_data()
+    X_clean, X_noisy, X_noisy_by_level, visual_examples = load_and_prepare_data(
+      target_length=512,
+      stride=256
+    )
     
     # Create a plots directory
     plots_dir = os.path.join(base_dir, 'Plots')
@@ -354,3 +341,5 @@ if __name__ == "__main__":
     print("- mit_st_X_test.npy")
     print("- mit_st_y_test.npy")
     print(f"Example plots saved in {plots_dir}")
+
+    #X_train shape: (4809, 512, 1)
