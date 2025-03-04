@@ -1,13 +1,13 @@
 import numpy as np
 import os
 import tensorflow as tf
+from tensorflow.keras.models import Sequential  # Correct import for Sequential
 
 # Force eager execution
 tf.config.run_functions_eagerly(True)
 
 # Explicitly disable TPU usage and stick with CPU
 try:
-    # Ignore TPUs
     tf.config.set_visible_devices([], 'TPU')
     print("TPU devices hidden")
 except:
@@ -36,12 +36,13 @@ if len(X_train.shape) == 2:
     X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
     y_test = y_test.reshape(y_test.shape[0], y_test.shape[1], 1)
 
-# Create a very simple model first to test environment
-model = tf.keras.Sequential([
-    tf.keras.layers.InputLayer(input_shape=(512, 1)),
-    tf.keras.layers.LSTM(40, return_sequences=True),
-    tf.keras.layers.Dense(1)
-])
+# Define the new model
+model = Sequential()
+model.add(tf.keras.layers.LSTM(140, input_shape=(512, 1), return_sequences=True))
+model.add(tf.keras.layers.Dense(140, activation='relu'))
+model.add(tf.keras.layers.LSTM(140, return_sequences=True))  # Second LSTM layer
+model.add(tf.keras.layers.Dense(140, activation='relu'))
+model.add(tf.keras.layers.Dense(1, activation='linear'))
 
 model.summary()
 
@@ -49,10 +50,10 @@ model.summary()
 output_dir = './lstm_model_output'
 os.makedirs(output_dir, exist_ok=True)
 
-# Compile model with minimal options
+# Compile model with standard Adam optimizer
 model.compile(
     loss='mse',
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001)  # Use standard Adam
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001)  # Standard Adam
 )
 
 # Minimal callbacks
@@ -68,12 +69,12 @@ early_stop = tf.keras.callbacks.EarlyStopping(
     patience=5
 )
 
-# Very small batch size and few epochs for testing
-batch_size = 16
-epochs = 10
+# Training parameters
+batch_size = 64
+epochs = 5
 
 try:
-    # Try training for just a few epochs to test
+    # Train the model
     print("Starting training...")
     history = model.fit(
         X_train, y_train,
@@ -95,10 +96,10 @@ try:
 except Exception as e:
     print(f"Error during execution: {str(e)}")
     
-    # Try an even simpler approach
+    # Fallback to a simpler approach
     print("\n\nTrying an alternative approach...")
     
-    # Create a simple dense model instead
+    # Create a simple dense model
     simple_model = tf.keras.Sequential([
         tf.keras.layers.Flatten(input_shape=(512, 1)),
         tf.keras.layers.Dense(100, activation='relu'),

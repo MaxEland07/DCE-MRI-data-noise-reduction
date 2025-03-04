@@ -12,7 +12,7 @@ y_test = np.load(os.path.join(data, 'mit_st_y_test.npy'))
 predictions = np.load(os.path.join(output_dir, 'predictions.npy'))
 
 # Select a sample
-sample_index = 50
+sample_index = 0
 noisy_signal = X_test[sample_index].flatten()
 predicted_clean = predictions[sample_index].flatten()
 actual_clean = y_test[sample_index].flatten()
