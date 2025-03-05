@@ -11,28 +11,25 @@ y_train = np.load(os.path.join(data_dir, 'mit_st_y_train.npy'))
 X_test = np.load(os.path.join(data_dir, 'mit_st_X_test.npy'))
 y_test = np.load(os.path.join(data_dir, 'mit_st_y_test.npy'))
 
+# Load normalization statistics (if available)
+norm_stats_path = os.path.join(data_dir, 'normalization_stats.npy')
+if os.path.exists(norm_stats_path):
+    print("Loading pre-computed normalization statistics...")
+    norm_stats = np.load(norm_stats_path, allow_pickle=True).item()
+else:
+    print("No normalization statistics found. Data is assumed to be already normalized.")
+    # Create empty stats for later use
+    norm_stats = {
+        'noisy_mean': 0, 'noisy_std': 1, 'clean_mean': 0, 'clean_std': 1,
+        'noisy_min': -1, 'noisy_max': 1, 'clean_min': -1, 'clean_max': 1
+    }
+
 print(f"X_train shape: {X_train.shape}")
 print(f"y_train shape: {y_train.shape}")
 print(f"X_test shape: {X_test.shape}")
 print(f"y_test shape: {y_test.shape}")
 
-# Save normalization parameters
-mean_X_train, range_X_train = X_train.mean(), X_train.max() - X_train.min()
-mean_y_train, range_y_train = y_train.mean(), y_train.max() - y_train.min()
-mean_X_test, range_X_test = X_test.mean(), X_test.max() - X_test.min()
-mean_y_test, range_y_test = y_test.mean(), y_test.max() - y_test.min()
-
-# Normalize data
-X_train = (X_train - mean_X_train) / range_X_train
-y_train = (y_train - mean_y_train) / range_y_train
-X_test = (X_test - mean_X_test) / range_X_test
-y_test = (y_test - mean_y_test) / range_y_test
-
-# Optional: Per-sample standardization (uncomment to use)
-# X_train = (X_train - X_train.mean(axis=1, keepdims=True)) / X_train.std(axis=1, keepdims=True)
-# y_train = (y_train - y_train.mean(axis=1, keepdims=True)) / y_train.std(axis=1, keepdims=True)
-# X_test = (X_test - X_test.mean(axis=1, keepdims=True)) / X_test.std(axis=1, keepdims=True)
-# y_test = (y_test - y_test.mean(axis=1, keepdims=True)) / y_test.std(axis=1, keepdims=True)
+# The data is already normalized in the data preparation step, so we don't need to normalize again
 
 # Define model
 model = Sequential([
@@ -112,25 +109,65 @@ print("Generating predictions...")
 y_pred = model.predict(X_test, batch_size=batch_size)
 np.save(os.path.join(output_dir, 'predictions.npy'), y_pred)
 
-# Denormalize
-y_pred = y_pred * range_y_test + mean_y_test
-X_test_denorm = X_test * range_X_test + mean_X_test
-y_test_denorm = y_test * range_y_test + mean_y_test
+# Function to denormalize data based on which normalization was used
+def denormalize(data, mean, std, min_val, max_val):
+    # If we used standardization (mean=0, std=1)
+    return data * std + mean
+    
+    # If we used min-max normalization to [-1, 1]
+    # return (data + 1) / 2 * (max_val - min_val) + min_val
+
+# Denormalize data for visualization
+X_test_denorm = denormalize(X_test, norm_stats['noisy_mean'], norm_stats['noisy_std'], 
+                           norm_stats['noisy_min'], norm_stats['noisy_max'])
+y_test_denorm = denormalize(y_test, norm_stats['clean_mean'], norm_stats['clean_std'],
+                           norm_stats['clean_min'], norm_stats['clean_max'])
+y_pred_denorm = denormalize(y_pred, norm_stats['clean_mean'], norm_stats['clean_std'],
+                           norm_stats['clean_min'], norm_stats['clean_max'])
 
 # Plot examples
 for i in range(min(10, len(X_test))):
-    plt.figure(figsize=(12, 4))
+    plt.figure(figsize=(12, 8))
+    
+    # Plot noisy signal (input)
     plt.subplot(3, 1, 1)
-    plt.plot(X_test_denorm[i, :, 0], label='Noisy')
-    plt.legend()
+    plt.title(f"Example {i+1}: Noisy Signal (Input)")
+    plt.plot(X_test_denorm[i, :, 0])
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    
+    # Plot predicted clean signal (output)
     plt.subplot(3, 1, 2)
-    plt.plot(y_pred[i, :, 0], label='Predicted')
-    plt.legend()
+    plt.title("Predicted Clean Signal (Output)")
+    plt.plot(y_pred_denorm[i, :, 0])
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    
+    # Plot ground truth clean signal (target)
     plt.subplot(3, 1, 3)
-    plt.plot(y_test_denorm[i, :, 0], label='Clean')
-    plt.legend()
+    plt.title("Ground Truth Clean Signal (Target)")
+    plt.plot(y_test_denorm[i, :, 0])
+    plt.xlabel("Sample")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f'example_{i}.png'))
+    plt.close()
+
+# Plot a few examples with all signals on the same plot to compare amplitudes
+for i in range(min(5, len(X_test))):
+    plt.figure(figsize=(15, 5))
+    plt.title(f"Signal Comparison (Example {i+1})")
+    plt.plot(X_test_denorm[i, :, 0], label='Noisy (Input)', alpha=0.7)
+    plt.plot(y_pred_denorm[i, :, 0], label='Predicted (Output)', alpha=0.7)
+    plt.plot(y_test_denorm[i, :, 0], label='Clean (Target)', alpha=0.7)
+    plt.xlabel("Sample")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'comparison_{i}.png'))
     plt.close()
 
 print("Predictions and example plots saved!")

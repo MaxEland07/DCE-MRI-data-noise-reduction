@@ -156,7 +156,34 @@ def load_and_prepare_data(target_length=512, stride=256):
     X_clean_array = np.array([pair['clean'] for pair in paired_data]).reshape(-1, target_length, 1)
     X_noisy_array = np.array([pair['noisy'] for pair in paired_data]).reshape(-1, target_length, 1)
     
-    return X_clean_array, X_noisy_array
+    # Calculate global statistics for consistent normalization
+    # We store these values to allow for proper denormalization later
+    normalization_stats = {
+        'noisy_mean': np.mean(X_noisy_array),
+        'noisy_std': np.std(X_noisy_array),
+        'clean_mean': np.mean(X_clean_array),
+        'clean_std': np.std(X_clean_array),
+        'noisy_min': np.min(X_noisy_array),
+        'noisy_max': np.max(X_noisy_array),
+        'clean_min': np.min(X_clean_array),
+        'clean_max': np.max(X_clean_array)
+    }
+    
+    # Option 1: Standardize both signals to mean=0, std=1
+    # This preserves the shape but aligns the scale
+    X_noisy_norm = (X_noisy_array - normalization_stats['noisy_mean']) / normalization_stats['noisy_std']
+    X_clean_norm = (X_clean_array - normalization_stats['clean_mean']) / normalization_stats['clean_std']
+    
+    # Option 2: Min-max normalization to range [-1, 1]
+    # This ensures both signals have the same amplitude range
+    # X_noisy_norm = 2 * (X_noisy_array - normalization_stats['noisy_min']) / (normalization_stats['noisy_max'] - normalization_stats['noisy_min']) - 1
+    # X_clean_norm = 2 * (X_clean_array - normalization_stats['clean_min']) / (normalization_stats['clean_max'] - normalization_stats['clean_min']) - 1
+    
+    # Save normalization statistics for later use
+    np.save(os.path.join(processed_data_dir, 'normalization_stats.npy'), normalization_stats)
+    print("Normalization statistics saved to: normalization_stats.npy")
+    
+    return X_clean_norm, X_noisy_norm
 
 if __name__ == "__main__":
     # Download data
@@ -183,3 +210,4 @@ if __name__ == "__main__":
     print("- mit_st_y_train.npy")
     print("- mit_st_X_test.npy")
     print("- mit_st_y_test.npy")
+    print("- normalization_stats.npy")
