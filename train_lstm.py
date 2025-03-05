@@ -31,16 +31,16 @@ print(f"y_test shape: {y_test.shape}")
 
 # The data is already normalized in the data preparation step, so we don't need to normalize again
 
-# Define model
+# Define model 
 model = Sequential([
-    tf.keras.layers.LSTM(128, input_shape=(512, 1), return_sequences=True),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True), 
+                                 input_shape=(512, 1)),  # Bidirectional first layer
     tf.keras.layers.Dropout(0.2),
-    tf.keras.layers.LSTM(128, return_sequences=True),
+    tf.keras.layers.LSTM(128, return_sequences=True),  # Keep second layer as is
     tf.keras.layers.Dropout(0.2),
     tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dense(1, activation='linear')
+    tf.keras.layers.Dense(1, 'linear')  # Keep output as is for now
 ])
-
 # Compile model
 model.compile(
     loss='mse',
