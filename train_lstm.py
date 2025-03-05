@@ -34,9 +34,9 @@ print(f"y_test shape: {y_test.shape}")
 # Define model
 model = Sequential([
     tf.keras.layers.LSTM(128, input_shape=(512, 1), return_sequences=True),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.LSTM(64, return_sequences=True),
-    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dropout(0.2),
+    tf.keras.layers.LSTM(128, return_sequences=True),
+    tf.keras.layers.Dropout(0.2),
     tf.keras.layers.Dense(64, activation='relu'),
     tf.keras.layers.Dense(1, activation='linear')
 ])
