@@ -7,14 +7,13 @@ from urllib.parse import urljoin
 from sklearn.model_selection import train_test_split
 import shutil
 
-# Define directory structure (adjusted for Kaggle Notebook persistence)
-base_dir = '/kaggle/working/MIT-BIH-ST-Dataset'  # Use /kaggle/working/ for persistence in Kaggle
+# Define directory structure relative to current directory (/kaggle/working/DCE-MRI-data-noise-reduction/)
+base_dir = './MIT-BIH-ST-Dataset'  # Relative to current dir
 raw_data_dir = os.path.join(base_dir, 'Raw_Data')
 processed_data_dir = os.path.join(base_dir, 'Train_Test_Data')
-plots_dir = os.path.join(base_dir, 'Plots')
 
-# Clear existing directories to ensure fresh start
-for directory in [base_dir, raw_data_dir, processed_data_dir, plots_dir]:
+# Clear existing directories to ensure fresh data
+for directory in [base_dir, raw_data_dir, processed_data_dir]:
     if os.path.exists(directory):
         shutil.rmtree(directory)
     os.makedirs(directory, exist_ok=True)
@@ -44,7 +43,6 @@ def download_nstdb_record(record_name):
             file_url = urljoin(base_url, f"{url_name}{ext}")
         else:
             file_url = urljoin(base_url, f"{record_name}{ext}")
-        
         file_dest = os.path.join(raw_data_dir, f"{record_name}{ext}")
         if not download_file(file_url, file_dest):
             if ext != '.atr':  # .atr might not exist, that's okay
@@ -109,7 +107,6 @@ def load_and_prepare_data(target_length=512, stride=256):
             if base_record not in clean_signals:
                 print(f"Warning: Clean record {base_record} not found, skipping {record_name}")
                 continue
-            
             record_path = os.path.join(raw_data_dir, record_name)
             record = wfdb.rdrecord(record_path)
             fs = record.fs
@@ -124,14 +121,12 @@ def load_and_prepare_data(target_length=512, stride=256):
                 if end_sample > len(noisy_signal):
                     print(f"Segment {segment_idx+1} exceeds record length, skipping")
                     continue
-                
                 chunk_start = start_sample
                 chunk_idx = 0
                 while chunk_start + target_length <= end_sample:
                     chunk_end = chunk_start + target_length
                     noisy_segment = noisy_signal[chunk_start:chunk_end]
                     clean_segment = clean_signals[base_record]['signal'][chunk_start:chunk_end]
-                    
                     X_noisy[snr_level].append({
                         'segment': noisy_segment, 'record': base_record,
                         'start_idx': chunk_start, 'segment_idx': segment_idx, 'chunk_idx': chunk_idx
@@ -141,7 +136,6 @@ def load_and_prepare_data(target_length=512, stride=256):
                         'start_idx': chunk_start, 'segment_idx': segment_idx, 'chunk_idx': chunk_idx,
                         'snr': snr_level
                     })
-                    
                     chunk_start += stride
                     chunk_idx += 1
                 print(f"Generated {chunk_idx} chunks for {record_name} segment {segment_idx+1}")
@@ -177,7 +171,7 @@ if __name__ == "__main__":
     print(f"Training data shape: {X_train.shape}, {y_train.shape}")
     print(f"Testing data shape: {X_test.shape}, {y_test.shape}")
     
-    # Save files with overwrite
+    # Save files
     np.save(os.path.join(processed_data_dir, 'mit_st_X_train.npy'), X_train)
     np.save(os.path.join(processed_data_dir, 'mit_st_y_train.npy'), y_train)
     np.save(os.path.join(processed_data_dir, 'mit_st_X_test.npy'), X_test)
