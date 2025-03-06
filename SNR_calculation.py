@@ -31,6 +31,7 @@ def main():
     predictions = np.load(os.path.join(output_dir, 'predictions.npy'))
     
     num_samples = len(X_test)
+    total_increase_in_snr = 0
 
     for sample_index in range(num_samples):
         noisy_signal = X_test[sample_index].flatten()
@@ -49,6 +50,12 @@ def main():
         print(f"  Predicted SNR: {predicted_snr:.2f} dB")
         print(f"  Increase in SNR: {increase_in_snr:.2f} dB")
         print()
+        total_increase_in_snr += increase_in_snr
+
+    # Calculate and print the average increase in SNR
+    average_increase_in_snr = total_increase_in_snr / num_samples
+    print(f"Average Increase in SNR across all samples: {average_increase_in_snr:.2f} dB")
+    
 
 if __name__ == "__main__":
     main()
