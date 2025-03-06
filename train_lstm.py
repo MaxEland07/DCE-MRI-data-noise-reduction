@@ -11,41 +11,52 @@ y_train = np.load(os.path.join(data_dir, 'mit_st_y_train.npy'))
 X_test = np.load(os.path.join(data_dir, 'mit_st_X_test.npy'))
 y_test = np.load(os.path.join(data_dir, 'mit_st_y_test.npy'))
 
-# Load normalization statistics (if available)
+# Load normalization statistics
 norm_stats_path = os.path.join(data_dir, 'normalization_stats.npy')
 if os.path.exists(norm_stats_path):
     print("Loading pre-computed normalization statistics...")
     norm_stats = np.load(norm_stats_path, allow_pickle=True).item()
+    norm_stats = {'mean': norm_stats['mean'], 'std': norm_stats['std']}
 else:
-    print("No normalization statistics found. Data is assumed to be already normalized.")
-    # Create empty stats for later use
-    norm_stats = {
-        'noisy_mean': 0, 'noisy_std': 1, 'clean_mean': 0, 'clean_std': 1,
-        'noisy_min': -1, 'noisy_max': 1, 'clean_min': -1, 'clean_max': 1
-    }
+    print("No normalization statistics found. Data assumed normalized.")
+    norm_stats = {'mean': 0, 'std': 1}
 
 print(f"X_train shape: {X_train.shape}")
 print(f"y_train shape: {y_train.shape}")
 print(f"X_test shape: {X_test.shape}")
 print(f"y_test shape: {y_test.shape}")
 
-# The data is already normalized in the data preparation step, so we don't need to normalize again
+# Define model from IEEE paper with added dropout
+def LSTM_denoising():
+    # Implementation of LSTM approach from Arsene et al. (2019)
+    # "Deep Learning Models for Denoising ECG Signals"
+    # https://ieeexplore.ieee.org/document/8902833
+    # Modified with dropout to address overfitting
+    model = Sequential([
+        tf.keras.layers.Input(shape=(512, 1)),
+        tf.keras.layers.LSTM(140, return_sequences=True),
+        tf.keras.layers.Dense(140, activation='relu'),
+        tf.keras.layers.Dropout(0.2),  # Added for regularization
+        tf.keras.layers.LSTM(140, return_sequences=True),
+        tf.keras.layers.Dense(140, activation='relu'),
+        tf.keras.layers.Dropout(0.2),  # Added for regularization
+        tf.keras.layers.Dense(1, activation='linear')
+    ])
+    return model
 
-# Define model 
-model = Sequential([
-    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True), 
-                                 input_shape=(512, 1)),  # Bidirectional first layer
-    tf.keras.layers.Dropout(0.2),
-    tf.keras.layers.LSTM(128, return_sequences=True),  # Keep second layer as is
-    tf.keras.layers.Dropout(0.2),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dense(1, 'linear')  # Keep output as is for now
-])
+model = LSTM_denoising()
+
+# Custom SNR metric
+def snr_metric(y_true, y_pred):
+    signal_power = tf.reduce_mean(tf.square(y_true))
+    noise_power = tf.reduce_mean(tf.square(y_true - y_pred))
+    return 10 * tf.math.log10(signal_power / (noise_power + 1e-10))
+
 # Compile model
 model.compile(
     loss='mse',
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005, clipnorm=1.0),
-    metrics=['mae']
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0),  # Increased LR
+    metrics=['mae', snr_metric]
 )
 model.summary()
 
@@ -62,13 +73,14 @@ checkpoint = tf.keras.callbacks.ModelCheckpoint(
 )
 early_stop = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
-    patience=15,
+    patience=10,  # Reduced from 15 for faster timeout
+    min_delta=0.001,  # Require at least 0.001 improvement
     restore_best_weights=True
 )
 reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
     monitor='val_loss',
     factor=0.3,
-    patience=5,
+    patience=3,  # Reduced from 5 for quicker LR adjustment
     min_lr=1e-6
 )
 
@@ -81,6 +93,7 @@ class PlotLosses(tf.keras.callbacks.Callback):
         logs = logs or {}
         self.train_losses.append(logs.get('loss'))
         self.val_losses.append(logs.get('val_loss'))
+        plt.figure(figsize=(8, 6))
         plt.plot(self.train_losses, label='Training Loss')
         plt.plot(self.val_losses, label='Validation Loss')
         plt.title(f'Epoch {epoch + 1}')
@@ -91,7 +104,7 @@ class PlotLosses(tf.keras.callbacks.Callback):
         plt.close()
 
 # Train
-batch_size = 128
+batch_size = 64  # Reduced from 128
 epochs = 100
 print("Starting training...")
 history = model.fit(
@@ -109,41 +122,29 @@ print("Generating predictions...")
 y_pred = model.predict(X_test, batch_size=batch_size)
 np.save(os.path.join(output_dir, 'predictions.npy'), y_pred)
 
-# Function to denormalize data based on which normalization was used
-def denormalize(data, mean, std, min_val, max_val):
-    # If we used standardization (mean=0, std=1)
+# Denormalize data
+def denormalize(data, mean, std):
     return data * std + mean
-    
-    # If we used min-max normalization to [-1, 1]
-    # return (data + 1) / 2 * (max_val - min_val) + min_val
 
-# Denormalize data for visualization
-X_test_denorm = denormalize(X_test, norm_stats['noisy_mean'], norm_stats['noisy_std'], 
-                           norm_stats['noisy_min'], norm_stats['noisy_max'])
-y_test_denorm = denormalize(y_test, norm_stats['clean_mean'], norm_stats['clean_std'],
-                           norm_stats['clean_min'], norm_stats['clean_max'])
-y_pred_denorm = denormalize(y_pred, norm_stats['clean_mean'], norm_stats['clean_std'],
-                           norm_stats['clean_min'], norm_stats['clean_max'])
+X_test_denorm = denormalize(X_test, norm_stats['mean'], norm_stats['std'])
+y_test_denorm = denormalize(y_test, norm_stats['mean'], norm_stats['std'])
+y_pred_denorm = denormalize(y_pred, norm_stats['mean'], norm_stats['std'])
 
 # Plot examples
-for i in range(min(10, len(X_test))):
+for i in range(min(len(X_test), 10)):
     plt.figure(figsize=(12, 8))
-    
-    # Plot noisy signal (input)
     plt.subplot(3, 1, 1)
     plt.title(f"Example {i+1}: Noisy Signal (Input)")
     plt.plot(X_test_denorm[i, :, 0])
     plt.ylabel("Amplitude")
     plt.grid(True)
     
-    # Plot predicted clean signal (output)
     plt.subplot(3, 1, 2)
     plt.title("Predicted Clean Signal (Output)")
     plt.plot(y_pred_denorm[i, :, 0])
     plt.ylabel("Amplitude")
     plt.grid(True)
     
-    # Plot ground truth clean signal (target)
     plt.subplot(3, 1, 3)
     plt.title("Ground Truth Clean Signal (Target)")
     plt.plot(y_test_denorm[i, :, 0])
@@ -155,8 +156,8 @@ for i in range(min(10, len(X_test))):
     plt.savefig(os.path.join(output_dir, f'example_{i}.png'))
     plt.close()
 
-# Plot a few examples with all signals on the same plot to compare amplitudes
-for i in range(min(5, len(X_test))):
+# Plot comparisons
+for i in range(min(len(X_test), 5)):
     plt.figure(figsize=(15, 5))
     plt.title(f"Signal Comparison (Example {i+1})")
     plt.plot(X_test_denorm[i, :, 0], label='Noisy (Input)', alpha=0.7)
