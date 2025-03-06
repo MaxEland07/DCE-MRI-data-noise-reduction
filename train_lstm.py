@@ -27,24 +27,44 @@ print(f"X_test shape: {X_test.shape}")
 print(f"y_test shape: {y_test.shape}")
 
 # Define model from IEEE paper with added dropout
-def LSTM_denoising():
-    # Implementation of LSTM approach from Arsene et al. (2019)
-    # "Deep Learning Models for Denoising ECG Signals"
-    # https://ieeexplore.ieee.org/document/8902833
-    # Modified with dropout to address overfitting
-    model = Sequential([
+def improved_ecg_denoising_model():
+    """
+    Hybrid CNN-LSTM-Attention model for ECG denoising
+    Combines benefits of CNN for local feature extraction, LSTM for temporal relationships,
+    and attention mechanism for focusing on important signal aspects
+    """
+    model = tf.keras.Sequential([
+        # Input layer
         tf.keras.layers.Input(shape=(512, 1)),
-        tf.keras.layers.LSTM(140, return_sequences=True),
-        tf.keras.layers.Dense(140, activation='relu'),
-        tf.keras.layers.Dropout(0.2),
-        tf.keras.layers.LSTM(140, return_sequences=True),
-        tf.keras.layers.Dense(140, activation='relu'),
-        tf.keras.layers.Dropout(0.2),
+        
+        # CNN layers for local feature extraction
+        tf.keras.layers.Conv1D(64, kernel_size=9, padding='same', activation='relu'),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Conv1D(64, kernel_size=5, padding='same', activation='relu'),
+        tf.keras.layers.BatchNormalization(),
+        
+        # Bidirectional LSTM for temporal dependencies (forward and backward)
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
+        tf.keras.layers.Dropout(0.3),
+        
+        # Second Bidirectional LSTM layer
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
+        tf.keras.layers.Dropout(0.3),
+        
+        # Attention mechanism to focus on relevant parts of the signal
+        tf.keras.layers.Attention()([
+            tf.keras.layers.Dense(128)(tf.keras.layers.LayerNormalization()), 
+            tf.keras.layers.Dense(128)(tf.keras.layers.LayerNormalization())
+        ]),
+        
+        # Final output layers
+        tf.keras.layers.Dense(64, activation='relu'),
         tf.keras.layers.Dense(1, activation='linear')
     ])
+    
     return model
 
-model = LSTM_denoising()
+model = improved_ecg_denoising_model()
 
 # Custom SNR metric (fixed to use tf.math.log)
 def snr_metric(y_true, y_pred):
