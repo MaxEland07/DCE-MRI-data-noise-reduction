@@ -174,7 +174,7 @@ if __name__ == "__main__":
     paired_data = load_and_prepare_data(target_length=512)
     
     # Visualize a few samples
-    visualize_sample(paired_data)
+    #visualize_sample(paired_data)
     
     # Convert to arrays
     X_clean_array = np.array([pair['clean'] for pair in paired_data]).reshape(-1, 512, 1)
