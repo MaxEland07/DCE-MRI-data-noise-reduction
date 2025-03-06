@@ -9,9 +9,10 @@ import tensorflow as tf
 output_dir = './lstm_model_output'
 data_dir = './MIT-BIH-ST-Dataset/Train_Test_Data'
 
-def download_clean_record(record_name):
-    """Download a clean record from the MIT-BIH database."""
-    record = wfdb.rdrecord(record_name)
+def download_clean_record(record_name, pn_dir='mitdb'):
+    """Download a clean record from the MIT-BIH database on PhysioNet."""
+    # Use pn_dir to specify the MIT-BIH Arrhythmia Database on PhysioNet
+    record = wfdb.rdrecord(record_name, pn_dir=pn_dir)
     return record.p_signal[:, 0], record.fs  # Return the signal and sampling frequency
 
 def add_noise(signal, noise_level):
@@ -68,8 +69,8 @@ def main():
     norm_stats = np.load(os.path.join(data_dir, 'normalization_stats.npy'), allow_pickle=True).item()
     print("Loaded normalization statistics.")
 
-    # Step 1: Download the clean record
-    clean_signal, fs = download_clean_record(record_name)
+    # Step 1: Download the clean record from PhysioNet
+    clean_signal, fs = download_clean_record(record_name, pn_dir='mitdb')
     print(f"Downloaded clean record {record_name} with length {len(clean_signal)} samples.")
 
     # Step 2: Add noise to the clean signal
