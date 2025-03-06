@@ -22,9 +22,7 @@ for directory in [base_dir, raw_data_dir, processed_data_dir]:
 def download_nstdb():
     """Download MIT-BIH Arrhythmia Database records."""
     print("Downloading MIT-BIH Database records...")
-    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108', '109',
-               '111', '112', '113', '114', '115', '116', '117', '118', '119', '121',
-               '122', '123', '124'][:10]  # Reduced to 10 for demo
+    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108']  # 9 records
     for record in records:
         try:
             wfdb.dl_database('mitdb', raw_data_dir, records=[record])
@@ -33,18 +31,7 @@ def download_nstdb():
             print(f"Error downloading {record}: {e}")
 
 def add_artificial_noise(signal, snr_db, noise_types, weights):
-    """
-    Add a mixture of artificial noises to a clean signal.
-    
-    Parameters:
-    signal (array): Clean ECG signal
-    snr_db (float): Target Signal-to-Noise Ratio in dB
-    noise_types (list): List of noise types to mix ('gaussian', 'pink', etc.)
-    weights (list): Weights for each noise type (sums to 1)
-    
-    Returns:
-    array: Noisy signal with mixed noise at specified SNR
-    """
+    """Add a mixture of artificial noises to a clean signal."""
     if len(weights) != len(noise_types) or not np.isclose(sum(weights), 1):
         raise ValueError("Weights must match noise_types length and sum to 1")
     
@@ -59,7 +46,7 @@ def add_artificial_noise(signal, snr_db, noise_types, weights):
             white_noise = np.random.normal(0, 1, len(signal))
             noise_fft = np.fft.rfft(white_noise)
             f = np.fft.rfftfreq(len(signal))
-            f[0] = f[1]  # Avoid division by zero
+            f[0] = f[1]
             noise_fft = noise_fft / np.sqrt(f)
             noise = np.fft.irfft(noise_fft)
             noise = noise * np.sqrt(noise_power / np.mean(noise**2))
@@ -87,22 +74,20 @@ def add_artificial_noise(signal, snr_db, noise_types, weights):
     
     return signal + total_noise
 
-def load_and_prepare_data(target_length=512, stride=256):
-    """Load and prepare data with mixed noise."""
-    X_clean = []
-    X_noisy = {snr: [] for snr in ['24dB', '18dB', '12dB', '6dB', '0dB', '-6dB']}
+def load_and_prepare_data(target_length=512):
+    """Load and prepare data with mixed noise, no sliding window."""
+    paired_data = []
     
-    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108', '109'][:10]
+    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108', '109']  # 9 records
     snr_levels = {'24dB': 24, '18dB': 18, '12dB': 12, '6dB': 6, '0dB': 0, '-6dB': -6}
     
-    # Define realistic noise mixtures for each SNR
     noise_mixes = {
-        '24dB': (['powerline', 'baseline'], [0.6, 0.4]),  # Subtle powerline with baseline
-        '18dB': (['gaussian', 'muscle'], [0.5, 0.5]),     # Gaussian noise with muscle artifacts
-        '12dB': (['pink', 'powerline'], [0.7, 0.3]),      # Pink noise with light powerline
-        '6dB': (['baseline', 'muscle'], [0.6, 0.4]),      # Baseline wander with muscle noise
-        '0dB': (['gaussian', 'powerline', 'baseline'], [0.4, 0.3, 0.3]),  # Complex mix
-        '-6dB': (['pink', 'muscle', 'powerline'], [0.5, 0.3, 0.2])  # Heavy mixed noise
+        '24dB': (['powerline', 'baseline'], [0.6, 0.4]),
+        '18dB': (['gaussian', 'muscle'], [0.5, 0.5]),
+        '12dB': (['pink', 'powerline'], [0.7, 0.3]),
+        '6dB': (['baseline', 'muscle'], [0.6, 0.4]),
+        '0dB': (['gaussian', 'powerline', 'baseline'], [0.4, 0.3, 0.3]),
+        '-6dB': (['pink', 'muscle', 'powerline'], [0.5, 0.3, 0.2])
     }
     
     clean_signals = {}
@@ -144,46 +129,19 @@ def load_and_prepare_data(target_length=512, stride=256):
                     clean_chunk = clean_segment[chunk_start:chunk_end]
                     noisy_chunk = noisy_segment[chunk_start:chunk_end]
                     
-                    X_clean.append({
-                        'segment': clean_chunk,
-                        'record': record_name,
-                        'start_idx': start_sample + chunk_start,
-                        'segment_idx': segment_idx,
-                        'chunk_idx': chunk_idx,
+                    paired_data.append({
+                        'clean': clean_chunk,
+                        'noisy': noisy_chunk,
                         'snr': snr_label,
-                        'noise_mix': '+'.join(noise_types)
-                    })
-                    X_noisy[snr_label].append({
-                        'segment': noisy_chunk,
-                        'record': record_name,
-                        'start_idx': start_sample + chunk_start,
-                        'segment_idx': segment_idx,
-                        'chunk_idx': chunk_idx,
-                        'noise_mix': '+'.join(noise_types)
+                        'noise_mix': '+'.join(noise_types),
+                        'record': record_name
                     })
                     
-                    chunk_start += stride
+                    chunk_start += target_length  # No overlap, stride = target_length
                     chunk_idx += 1
                 
                 print(f"Generated {chunk_idx} chunks for {record_name} segment {segment_idx+1} "
                       f"with {noise_mixes[snr_label][0]} at {snr_label}")
-    
-    # Convert to paired data
-    paired_data = []
-    for snr in X_noisy:
-        for idx, noisy_item in enumerate(X_noisy[snr]):
-            key = f"{noisy_item['record']}_{noisy_item['segment_idx']}_{noisy_item['chunk_idx']}"
-            for clean_item in X_clean:
-                clean_key = f"{clean_item['record']}_{clean_item['segment_idx']}_{clean_item['chunk_idx']}"
-                if key == clean_key:
-                    paired_data.append({
-                        'clean': clean_item['segment'],
-                        'noisy': noisy_item['segment'],
-                        'snr': snr,
-                        'noise_mix': noisy_item['noise_mix'],
-                        'record': noisy_item['record']
-                    })
-                    break
     
     return paired_data
 
@@ -213,7 +171,7 @@ if __name__ == "__main__":
     download_nstdb()
     
     # Load and prepare data
-    paired_data = load_and_prepare_data(target_length=512, stride=256)
+    paired_data = load_and_prepare_data(target_length=512)
     
     # Visualize a few samples
     visualize_sample(paired_data)
