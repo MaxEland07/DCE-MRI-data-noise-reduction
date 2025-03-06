@@ -33,34 +33,37 @@ def improved_ecg_denoising_model():
     Combines benefits of CNN for local feature extraction, LSTM for temporal relationships,
     and attention mechanism for focusing on important signal aspects
     """
-    model = tf.keras.Sequential([
-        # Input layer
-        tf.keras.layers.Input(shape=(512, 1)),
-        
-        # CNN layers for local feature extraction
-        tf.keras.layers.Conv1D(64, kernel_size=9, padding='same', activation='relu'),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.Conv1D(64, kernel_size=5, padding='same', activation='relu'),
-        tf.keras.layers.BatchNormalization(),
-        
-        # Bidirectional LSTM for temporal dependencies (forward and backward)
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
-        tf.keras.layers.Dropout(0.3),
-        
-        # Second Bidirectional LSTM layer
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
-        tf.keras.layers.Dropout(0.3),
-        
-        # Attention mechanism to focus on relevant parts of the signal
-        tf.keras.layers.Attention()([
-            tf.keras.layers.Dense(128)(tf.keras.layers.LayerNormalization()), 
-            tf.keras.layers.Dense(128)(tf.keras.layers.LayerNormalization())
-        ]),
-        
-        # Final output layers
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(1, activation='linear')
-    ])
+    # Define the input
+    inputs = tf.keras.layers.Input(shape=(512, 1))
+
+    # CNN layers for local feature extraction
+    x = tf.keras.layers.Conv1D(64, kernel_size=9, padding='same', activation='relu')(inputs)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Conv1D(64, kernel_size=5, padding='same', activation='relu')(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+
+    # Bidirectional LSTM for temporal dependencies
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True))(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+
+    # Second Bidirectional LSTM layer
+    x = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True))(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+
+    # Attention mechanism
+    # Apply LayerNormalization and Dense to create query and value tensors
+    norm = tf.keras.layers.LayerNormalization()(x)
+    query = tf.keras.layers.Dense(128)(norm)
+    value = tf.keras.layers.Dense(128)(norm)
+    # Pass query and value to the Attention layer
+    x = tf.keras.layers.Attention()([query, value])
+
+    # Final output layers
+    x = tf.keras.layers.Dense(64, activation='relu')(x)
+    x = tf.keras.layers.Dense(1, activation='linear')(x)
+
+    # Define the model
+    model = tf.keras.Model(inputs=inputs, outputs=x)
     
     return model
 
