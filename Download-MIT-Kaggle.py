@@ -6,194 +6,234 @@ import requests
 from urllib.parse import urljoin
 from sklearn.model_selection import train_test_split
 import shutil
+from scipy.signal import butter, filtfilt
 
-# Define directory structure relative to current directory (/kaggle/working/DCE-MRI-data-noise-reduction/)
-base_dir = './MIT-BIH-ST-Dataset'  # Relative to current dir
+# Define directory structure
+base_dir = './MIT-BIH-ST-Dataset'
 raw_data_dir = os.path.join(base_dir, 'Raw_Data')
 processed_data_dir = os.path.join(base_dir, 'Train_Test_Data')
 
-# Clear existing directories to ensure fresh data
+# Clear existing directories
 for directory in [base_dir, raw_data_dir, processed_data_dir]:
     if os.path.exists(directory):
         shutil.rmtree(directory)
     os.makedirs(directory, exist_ok=True)
 
-def download_file(url, dest_path):
-    """Download a file from a URL to a destination path"""
-    print(f"Downloading {url} to {dest_path}")
-    r = requests.get(url, stream=True)
-    if r.status_code == 200:
-        with open(dest_path, 'wb') as f:
-            for chunk in r.iter_content(1024):
-                f.write(chunk)
-        return True
-    else:
-        print(f"Failed to download {url}, status code {r.status_code}")
-        return False
-
-def download_nstdb_record(record_name):
-    """Download a specific record from the MIT-BIH Noise Stress Test Database"""
-    base_url = "https://physionet.org/files/nstdb/1.0.0/"
-    extensions = ['.dat', '.hea', '.atr']
-    
-    success = True
-    for ext in extensions:
-        if record_name.endswith('_6'):
-            url_name = record_name.replace('_6', '%5F6')
-            file_url = urljoin(base_url, f"{url_name}{ext}")
-        else:
-            file_url = urljoin(base_url, f"{record_name}{ext}")
-        file_dest = os.path.join(raw_data_dir, f"{record_name}{ext}")
-        if not download_file(file_url, file_dest):
-            if ext != '.atr':  # .atr might not exist, that's okay
-                success = False
-    return success
-
 def download_nstdb():
-    """Download the MIT-BIH Noise Stress Test Database"""
-    print("Downloading MIT-BIH Noise Stress Test Database...")
-    
-    # Download clean records
-    clean_records = ['118', '119']
-    for record in clean_records:
-        print(f"Downloading clean record {record}...")
+    """Download MIT-BIH Arrhythmia Database records."""
+    print("Downloading MIT-BIH Database records...")
+    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108', '109',
+               '111', '112', '113', '114', '115', '116', '117', '118', '119', '121',
+               '122', '123', '124'][:10]  # Reduced to 10 for demo
+    for record in records:
         try:
             wfdb.dl_database('mitdb', raw_data_dir, records=[record])
             print(f"Successfully downloaded {record}")
         except Exception as e:
             print(f"Error downloading {record}: {e}")
+
+def add_artificial_noise(signal, snr_db, noise_types, weights):
+    """
+    Add a mixture of artificial noises to a clean signal.
     
-    # Download noisy records
-    noisy_records = [
-        '118e24', '118e18', '118e12', '118e06', '118e00', '118e_6',
-        '119e24', '119e18', '119e12', '119e06', '119e00', '119e_6'
-    ]
-    for record in noisy_records:
-        print(f"Downloading noisy record {record}...")
-        success = download_nstdb_record(record)
-        if success:
-            print(f"Successfully downloaded {record}")
+    Parameters:
+    signal (array): Clean ECG signal
+    snr_db (float): Target Signal-to-Noise Ratio in dB
+    noise_types (list): List of noise types to mix ('gaussian', 'pink', etc.)
+    weights (list): Weights for each noise type (sums to 1)
+    
+    Returns:
+    array: Noisy signal with mixed noise at specified SNR
+    """
+    if len(weights) != len(noise_types) or not np.isclose(sum(weights), 1):
+        raise ValueError("Weights must match noise_types length and sum to 1")
+    
+    signal_power = np.mean(signal**2)
+    noise_power = signal_power / (10**(snr_db/10))
+    total_noise = np.zeros(len(signal))
+    
+    for noise_type, weight in zip(noise_types, weights):
+        if noise_type == 'gaussian':
+            noise = np.random.normal(0, np.sqrt(noise_power), len(signal))
+        elif noise_type == 'pink':
+            white_noise = np.random.normal(0, 1, len(signal))
+            noise_fft = np.fft.rfft(white_noise)
+            f = np.fft.rfftfreq(len(signal))
+            f[0] = f[1]  # Avoid division by zero
+            noise_fft = noise_fft / np.sqrt(f)
+            noise = np.fft.irfft(noise_fft)
+            noise = noise * np.sqrt(noise_power / np.mean(noise**2))
+        elif noise_type == 'powerline':
+            t = np.arange(len(signal))
+            noise = (np.sin(2 * np.pi * 50 * t / len(signal)) +
+                     0.5 * np.sin(2 * np.pi * 100 * t / len(signal)) +
+                     0.3 * np.sin(2 * np.pi * 60 * t / len(signal)))
+            noise = noise * np.sqrt(noise_power / np.mean(noise**2))
+        elif noise_type == 'baseline':
+            t = np.arange(len(signal))
+            noise = (np.sin(2 * np.pi * 0.1 * t / len(signal)) +
+                     0.5 * np.sin(2 * np.pi * 0.3 * t / len(signal)) +
+                     0.2 * np.sin(2 * np.pi * 0.5 * t / len(signal)))
+            noise = noise * np.sqrt(noise_power / np.mean(noise**2))
+        elif noise_type == 'muscle':
+            white_noise = np.random.normal(0, 1, len(signal))
+            b, a = butter(4, 0.1, 'highpass')
+            noise = filtfilt(b, a, white_noise)
+            noise = noise * np.sqrt(noise_power / np.mean(noise**2))
         else:
-            print(f"Failed to download some files for {record}")
+            raise ValueError(f"Unknown noise type: {noise_type}")
+        
+        total_noise += noise * weight
     
-    print("Download complete!")
+    return signal + total_noise
 
 def load_and_prepare_data(target_length=512, stride=256):
-    """Load and prepare data for training"""
+    """Load and prepare data with mixed noise."""
     X_clean = []
     X_noisy = {snr: [] for snr in ['24dB', '18dB', '12dB', '6dB', '0dB', '-6dB']}
     
-    clean_records = ['118', '119']
-    noisy_record_map = {
-        '118e24': '24dB', '118e18': '18dB', '118e12': '12dB',
-        '118e06': '6dB', '118e00': '0dB', '118e_6': '-6dB',
-        '119e24': '24dB', '119e18': '18dB', '119e12': '12dB',
-        '119e06': '6dB', '119e00': '0dB', '119e_6': '-6dB'
+    records = ['100', '101', '102', '103', '104', '105', '106', '107', '108', '109'][:10]
+    snr_levels = {'24dB': 24, '18dB': 18, '12dB': 12, '6dB': 6, '0dB': 0, '-6dB': -6}
+    
+    # Define realistic noise mixtures for each SNR
+    noise_mixes = {
+        '24dB': (['powerline', 'baseline'], [0.6, 0.4]),  # Subtle powerline with baseline
+        '18dB': (['gaussian', 'muscle'], [0.5, 0.5]),     # Gaussian noise with muscle artifacts
+        '12dB': (['pink', 'powerline'], [0.7, 0.3]),      # Pink noise with light powerline
+        '6dB': (['baseline', 'muscle'], [0.6, 0.4]),      # Baseline wander with muscle noise
+        '0dB': (['gaussian', 'powerline', 'baseline'], [0.4, 0.3, 0.3]),  # Complex mix
+        '-6dB': (['pink', 'muscle', 'powerline'], [0.5, 0.3, 0.2])  # Heavy mixed noise
     }
     
     clean_signals = {}
-    for record_name in clean_records:
+    for record_name in records:
         try:
             record_path = os.path.join(raw_data_dir, record_name)
             record = wfdb.rdrecord(record_path)
-            clean_signals[record_name] = {'signal': record.p_signal[:, 0], 'fs': record.fs}
-            print(f"Loaded clean record {record_name}, length: {len(clean_signals[record_name]['signal'])}")
-        except Exception as e:
-            print(f"Error loading clean record {record_name}: {e}")
-    
-    for record_name, snr_level in noisy_record_map.items():
-        try:
-            base_record = record_name[:3]
-            if base_record not in clean_signals:
-                print(f"Warning: Clean record {base_record} not found, skipping {record_name}")
+            signal = record.p_signal[:, 0]
+            if signal.size == 0:
+                print(f"Skipping empty record {record_name}")
                 continue
-            record_path = os.path.join(raw_data_dir, record_name)
-            record = wfdb.rdrecord(record_path)
-            fs = record.fs
-            noisy_signal = record.p_signal[:, 0]
-            print(f"Loaded noisy record {record_name}, length: {len(noisy_signal)}")
+            clean_signals[record_name] = {'signal': signal, 'fs': record.fs}
+            print(f"Loaded clean record {record_name}, length: {len(signal)}")
+        except Exception as e:
+            print(f"Error loading record {record_name}: {e}")
+    
+    for record_name, signal_info in clean_signals.items():
+        clean_signal = signal_info['signal']
+        fs = signal_info['fs']
+        segment_samples = int(2 * 60 * fs)  # 2 minutes
+        
+        n_segments = len(clean_signal) // segment_samples
+        for segment_idx in range(n_segments):
+            start_sample = segment_idx * segment_samples
+            end_sample = start_sample + segment_samples
+            if end_sample > len(clean_signal):
+                continue
             
-            noisy_segment_starts = [5, 9, 13]  # minutes
-            segment_duration = 2  # minutes
-            for segment_idx, start_min in enumerate(noisy_segment_starts):
-                start_sample = int(start_min * 60 * fs)
-                end_sample = int((start_min + segment_duration) * 60 * fs)
-                if end_sample > len(noisy_signal):
-                    print(f"Segment {segment_idx+1} exceeds record length, skipping")
-                    continue
-                chunk_start = start_sample
+            clean_segment = clean_signal[start_sample:end_sample]
+            
+            for snr_label, snr_db in snr_levels.items():
+                noise_types, weights = noise_mixes[snr_label]
+                noisy_segment = add_artificial_noise(clean_segment, snr_db, noise_types, weights)
+                
+                chunk_start = 0
                 chunk_idx = 0
-                while chunk_start + target_length <= end_sample:
+                while chunk_start + target_length <= len(clean_segment):
                     chunk_end = chunk_start + target_length
-                    noisy_segment = noisy_signal[chunk_start:chunk_end]
-                    clean_segment = clean_signals[base_record]['signal'][chunk_start:chunk_end]
-                    X_noisy[snr_level].append({
-                        'segment': noisy_segment, 'record': base_record,
-                        'start_idx': chunk_start, 'segment_idx': segment_idx, 'chunk_idx': chunk_idx
-                    })
+                    clean_chunk = clean_segment[chunk_start:chunk_end]
+                    noisy_chunk = noisy_segment[chunk_start:chunk_end]
+                    
                     X_clean.append({
-                        'segment': clean_segment, 'record': base_record,
-                        'start_idx': chunk_start, 'segment_idx': segment_idx, 'chunk_idx': chunk_idx,
-                        'snr': snr_level
+                        'segment': clean_chunk,
+                        'record': record_name,
+                        'start_idx': start_sample + chunk_start,
+                        'segment_idx': segment_idx,
+                        'chunk_idx': chunk_idx,
+                        'snr': snr_label,
+                        'noise_mix': '+'.join(noise_types)
                     })
+                    X_noisy[snr_label].append({
+                        'segment': noisy_chunk,
+                        'record': record_name,
+                        'start_idx': start_sample + chunk_start,
+                        'segment_idx': segment_idx,
+                        'chunk_idx': chunk_idx,
+                        'noise_mix': '+'.join(noise_types)
+                    })
+                    
                     chunk_start += stride
                     chunk_idx += 1
-                print(f"Generated {chunk_idx} chunks for {record_name} segment {segment_idx+1}")
-        except Exception as e:
-            print(f"Error processing noisy record {record_name}: {e}")
+                
+                print(f"Generated {chunk_idx} chunks for {record_name} segment {segment_idx+1} "
+                      f"with {noise_mixes[snr_label][0]} at {snr_label}")
     
     # Convert to paired data
     paired_data = []
     for snr in X_noisy:
-        for noisy_item in X_noisy[snr]:
+        for idx, noisy_item in enumerate(X_noisy[snr]):
             key = f"{noisy_item['record']}_{noisy_item['segment_idx']}_{noisy_item['chunk_idx']}"
             for clean_item in X_clean:
                 clean_key = f"{clean_item['record']}_{clean_item['segment_idx']}_{clean_item['chunk_idx']}"
                 if key == clean_key:
-                    paired_data.append({'clean': clean_item['segment'], 'noisy': noisy_item['segment'], 'snr': snr})
+                    paired_data.append({
+                        'clean': clean_item['segment'],
+                        'noisy': noisy_item['segment'],
+                        'snr': snr,
+                        'noise_mix': noisy_item['noise_mix'],
+                        'record': noisy_item['record']
+                    })
                     break
     
-    X_clean_array = np.array([pair['clean'] for pair in paired_data]).reshape(-1, target_length, 1)
-    X_noisy_array = np.array([pair['noisy'] for pair in paired_data]).reshape(-1, target_length, 1)
-    
-    # Calculate global statistics for consistent normalization
-    # We store these values to allow for proper denormalization later
-    normalization_stats = {
-        'noisy_mean': np.mean(X_noisy_array),
-        'noisy_std': np.std(X_noisy_array),
-        'clean_mean': np.mean(X_clean_array),
-        'clean_std': np.std(X_clean_array),
-        'noisy_min': np.min(X_noisy_array),
-        'noisy_max': np.max(X_noisy_array),
-        'clean_min': np.min(X_clean_array),
-        'clean_max': np.max(X_clean_array)
-    }
-    
-    # Option 1: Standardize both signals to mean=0, std=1
-    # This preserves the shape but aligns the scale
-    X_noisy_norm = (X_noisy_array - normalization_stats['noisy_mean']) / normalization_stats['noisy_std']
-    X_clean_norm = (X_clean_array - normalization_stats['clean_mean']) / normalization_stats['clean_std']
-    
-    # Option 2: Min-max normalization to range [-1, 1]
-    # This ensures both signals have the same amplitude range
-    # X_noisy_norm = 2 * (X_noisy_array - normalization_stats['noisy_min']) / (normalization_stats['noisy_max'] - normalization_stats['noisy_min']) - 1
-    # X_clean_norm = 2 * (X_clean_array - normalization_stats['clean_min']) / (normalization_stats['clean_max'] - normalization_stats['clean_min']) - 1
-    
-    # Save normalization statistics for later use
-    np.save(os.path.join(processed_data_dir, 'normalization_stats.npy'), normalization_stats)
-    print("Normalization statistics saved to: normalization_stats.npy")
-    
-    return X_clean_norm, X_noisy_norm
+    return paired_data
+
+def visualize_sample(paired_data, num_samples=3):
+    """Visualize clean vs noisy signals for a few samples."""
+    sampled_data = paired_data[:num_samples]
+    for i, pair in enumerate(sampled_data):
+        plt.figure(figsize=(12, 4))
+        plt.plot(pair['clean'], label='Clean', color='blue')
+        plt.plot(pair['noisy'], label=f"Noisy ({pair['snr']}, {pair['noise_mix']})", color='red', alpha=0.7)
+        plt.title(f"Sample {i+1}: Clean vs Noisy Signal")
+        plt.legend()
+        plt.xlabel("Sample")
+        plt.ylabel("Amplitude")
+        plt.show()
+
+def create_stratified_split(paired_data, test_size=0.2, random_state=42):
+    """Create a stratified split by record."""
+    unique_records = list(set([pair['record'] for pair in paired_data]))
+    train_records, test_records = train_test_split(unique_records, test_size=test_size, random_state=random_state)
+    train_indices = [i for i, pair in enumerate(paired_data) if pair['record'] in train_records]
+    test_indices = [i for i, pair in enumerate(paired_data) if pair['record'] in test_records]
+    return train_indices, test_indices
 
 if __name__ == "__main__":
     # Download data
     download_nstdb()
     
     # Load and prepare data
-    X_clean, X_noisy = load_and_prepare_data(target_length=512, stride=256)
+    paired_data = load_and_prepare_data(target_length=512, stride=256)
     
-    # Split into train/test
-    X_train, X_test, y_train, y_test = train_test_split(X_noisy, X_clean, test_size=0.2, random_state=42)
+    # Visualize a few samples
+    visualize_sample(paired_data)
+    
+    # Convert to arrays
+    X_clean_array = np.array([pair['clean'] for pair in paired_data]).reshape(-1, 512, 1)
+    X_noisy_array = np.array([pair['noisy'] for pair in paired_data]).reshape(-1, 512, 1)
+    
+    # Normalize
+    mean_clean = np.mean(X_clean_array)
+    std_clean = np.std(X_clean_array)
+    X_clean_array = (X_clean_array - mean_clean) / std_clean
+    X_noisy_array = (X_noisy_array - mean_clean) / std_clean
+    
+    # Stratified split
+    train_indices, test_indices = create_stratified_split(paired_data)
+    X_train = X_noisy_array[train_indices]
+    X_test = X_noisy_array[test_indices]
+    y_train = X_clean_array[train_indices]
+    y_test = X_clean_array[test_indices]
     
     print(f"Training data shape: {X_train.shape}, {y_train.shape}")
     print(f"Testing data shape: {X_test.shape}, {y_test.shape}")
@@ -203,6 +243,7 @@ if __name__ == "__main__":
     np.save(os.path.join(processed_data_dir, 'mit_st_y_train.npy'), y_train)
     np.save(os.path.join(processed_data_dir, 'mit_st_X_test.npy'), X_test)
     np.save(os.path.join(processed_data_dir, 'mit_st_y_test.npy'), y_test)
+    np.save(os.path.join(processed_data_dir, 'normalization_stats.npy'), {'mean': mean_clean, 'std': std_clean})
     
     print("Data preparation complete!")
     print(f"Files saved in {processed_data_dir}:")
