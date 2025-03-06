@@ -36,26 +36,28 @@ def LSTM_denoising():
         tf.keras.layers.Input(shape=(512, 1)),
         tf.keras.layers.LSTM(140, return_sequences=True),
         tf.keras.layers.Dense(140, activation='relu'),
-        tf.keras.layers.Dropout(0.2),  # Added for regularization
+        tf.keras.layers.Dropout(0.2),
         tf.keras.layers.LSTM(140, return_sequences=True),
         tf.keras.layers.Dense(140, activation='relu'),
-        tf.keras.layers.Dropout(0.2),  # Added for regularization
+        tf.keras.layers.Dropout(0.2),
         tf.keras.layers.Dense(1, activation='linear')
     ])
     return model
 
 model = LSTM_denoising()
 
-# Custom SNR metric
+# Custom SNR metric (fixed to use tf.math.log)
 def snr_metric(y_true, y_pred):
     signal_power = tf.reduce_mean(tf.square(y_true))
     noise_power = tf.reduce_mean(tf.square(y_true - y_pred))
-    return 10 * tf.math.log10(signal_power / (noise_power + 1e-10))
+    # Use tf.math.log and change of base: log10(x) = log(x) / log(10)
+    log10_signal_noise = tf.math.log(signal_power / (noise_power + 1e-10)) / tf.math.log(10.0)
+    return 10.0 * log10_signal_noise
 
 # Compile model
 model.compile(
     loss='mse',
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0),  # Increased LR
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0),
     metrics=['mae', snr_metric]
 )
 model.summary()
@@ -73,14 +75,14 @@ checkpoint = tf.keras.callbacks.ModelCheckpoint(
 )
 early_stop = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
-    patience=10,  # Reduced from 15 for faster timeout
-    min_delta=0.001,  # Require at least 0.001 improvement
+    patience=10,
+    min_delta=0.001,
     restore_best_weights=True
 )
 reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
     monitor='val_loss',
     factor=0.3,
-    patience=3,  # Reduced from 5 for quicker LR adjustment
+    patience=3,
     min_lr=1e-6
 )
 
@@ -104,7 +106,7 @@ class PlotLosses(tf.keras.callbacks.Callback):
         plt.close()
 
 # Train
-batch_size = 64  # Reduced from 128
+batch_size = 64
 epochs = 100
 print("Starting training...")
 history = model.fit(
