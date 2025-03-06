@@ -1,22 +1,25 @@
 import numpy as np
 import os
 
-def calculate_snr(clean, noisy, prediction):
-    """Calculate the Signal-to-Noise Ratio (SNR) for predictions and original noisy signals."""
-    P_clean = np.mean(clean**2)
+def calculate_snr(clean, noisy_or_predicted):
+    """Calculate the Signal-to-Noise Ratio (SNR).
 
-    # Calculate noise for predictions and original noisy signals
-    prediction_noise = prediction - clean
-    original_noise = noisy - clean
+    Args:
+        clean (np.ndarray): The clean signal.
+        noisy_or_predicted (np.ndarray): The noisy or predicted signal.
+
+    Returns:
+        float: The SNR value in dB.
+    """
+    P_signal = np.mean(clean**2)
+    noise = noisy_or_predicted - clean
+    P_noise = np.mean(noise**2)
     
-    P_prediction_noise = np.mean(prediction_noise**2)
-    P_original_noise = np.mean(original_noise**2)
+    if P_noise == 0:
+        return np.inf  # Handle the case where there is no noise
     
-    # Calculate SNR
-    prediction_snr = 10 * np.log10(P_clean / P_prediction_noise)
-    original_snr = 10 * np.log10(P_clean / P_original_noise)
-    
-    return prediction_snr, original_snr
+    snr = 10 * np.log10(P_signal / P_noise)
+    return snr
 
 def main():
     output_dir = './lstm_model_output'
@@ -27,32 +30,25 @@ def main():
     y_test = np.load(os.path.join(data, 'mit_st_y_test.npy'))
     predictions = np.load(os.path.join(output_dir, 'predictions.npy'))
     
-    total_increase_in_snr = 0  # Initialize total increase in SNR
-    num_samples = len(X_test)  # Get the number of samples
+    num_samples = len(X_test)
 
-    # Loop through all samples
     for sample_index in range(num_samples):
         noisy_signal = X_test[sample_index].flatten()
-        predicted_clean = predictions[sample_index].flatten()
-        actual_clean = y_test[sample_index].flatten()
+        predicted_signal = predictions[sample_index].flatten()
+        clean_signal = y_test[sample_index].flatten()
         
-        # Calculate SNR for the current sample
-        original_snr, prediction_snr = calculate_snr(actual_clean, noisy_signal, predicted_clean)
+        # Calculate SNR for noisy and predicted signals
+        noisy_snr = calculate_snr(clean_signal, noisy_signal)
+        predicted_snr = calculate_snr(clean_signal, predicted_signal)
         
-        # Difference between original and predicted SNR
-        increase_in_snr = original_snr - prediction_snr
-        total_increase_in_snr += increase_in_snr  # Accumulate the increase in SNR
-
-        # Print the SNR values
+        # Calculate the increase in SNR
+        increase_in_snr = predicted_snr - noisy_snr
+        
         print(f"Sample {sample_index}:")
-        print(f"  Original Noisy SNR: {original_snr:.2f} dB")
-        print(f"  Predicted Signal SNR: {prediction_snr:.2f} dB")
+        print(f"  Noisy SNR: {noisy_snr:.2f} dB")
+        print(f"  Predicted SNR: {predicted_snr:.2f} dB")
         print(f"  Increase in SNR: {increase_in_snr:.2f} dB")
-        print()  # Blank line for better readability
-
-    # Calculate and print the average increase in SNR
-    average_increase_in_snr = total_increase_in_snr / num_samples
-    print(f"Average Increase in SNR across all samples: {average_increase_in_snr:.2f} dB")
+        print()
 
 if __name__ == "__main__":
     main()
